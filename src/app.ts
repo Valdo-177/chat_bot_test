@@ -24,13 +24,37 @@ const getSpecialties = async () => {
 };
 
 const flowConfirmacion = addKeyword(['si', 'sí', 'correcto']).addAnswer(
-    '¡Perfecto! Tu cita ha sido agendada con éxito. Te esperamos.',
+    'Agendando cita medica',
     null,
-    async (ctx, { state, endFlow }) => {
+    async (ctx, { state, endFlow, flowDynamic }) => {
         const appointmentData = state.get('appointmentData');
         console.log('Datos de la cita para guardar:', appointmentData);
-        // ... (código para guardar en PostgreSQL)
-        console.log('Cita guardada en la base de datos');
+
+        try {
+            const response = await fetch("http://localhost:5000/api/quote", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(appointmentData)
+            });
+
+            if (!response.ok) {
+                console.error("Error al agendar la cita en la API externa:", response.status, response.statusText);
+                await flowDynamic("Lo siento, hubo un problema al agendar tu cita. Por favor, intenta de nuevo más tarde.");
+                return endFlow();
+            }
+
+            const result = await response.json();
+            console.log('Respuesta de la API de agendamiento:', result);
+
+            await flowDynamic('¡Perfecto! Tu cita ha sido agendada con éxito. Te esperamos.');
+
+        } catch (error) {
+            console.error("Error en la petición POST para agendar la cita:", error);
+            await flowDynamic("Lo siento, no pude comunicarme con el servicio de agendamiento. Por favor, intenta de nuevo más tarde.");
+        }
+
         return endFlow();
     }
 );
@@ -56,13 +80,17 @@ const flowSummary = addKeyword('__any__').addAnswer(
             return;
         }
 
+        console.log('Datos de la cita para mostrar:', appointmentData);
+        // localhost:5000/api/quote
+
         const summary = `
         *Resumen de la Cita:*
-        *Nombre:* ${appointmentData.nombreCompleto}
-        *Fecha:* ${appointmentData.fecha}
-        *Hora:* ${appointmentData.hora}
-        *Especialidad:* ${appointmentData.especialidad}
+        Nombre: ${appointmentData.nombreCompleto}
+        Fecha: ${appointmentData.fecha}
+        Hora: ${appointmentData.hora}
+        Especialidad: ${appointmentData.especialidad}
         `;
+        console.log('Resumen de la cita:', summary);
         await flowDynamic(summary);
         await flowDynamic("¿Es correcta la información para agendar la cita? (Sí/No)");
     },
@@ -83,6 +111,7 @@ const flowIA = addKeyword('__any__').addAnswer(
         const prompt = `
         Eres un extractor de datos para citas médicas.
         Debes devolver un JSON con los campos: "nombreCompleto", "fecha", "hora", "especialidad", "telefono".
+        - El "nombreCompleto" debe ser extraído de la parte del mensaje que parezca un nombre.
         - La fecha debe estar en formato YYYY-MM-DD (asume año actual si no se especifica).
         - La hora debe estar en formato HH:MM en 12h.
         - Acepta entradas como "mañana", "próximo lunes", "20 de agosto", "4 de la tarde".
@@ -126,7 +155,7 @@ const flowIA = addKeyword('__any__').addAnswer(
 
             const data = await response.json();
             console.log("Respuesta completa de la API de Ollama:", data);
-            
+
             // Extraer el JSON de la respuesta. El modelo puede devolverlo dentro de un bloque de código.
             const aiResponse = data.response;
             const jsonStartIndex = aiResponse.indexOf('{');
@@ -145,7 +174,10 @@ const flowIA = addKeyword('__any__').addAnswer(
 
             let extractedData;
             try {
-                extractedData = JSON.parse(jsonString);
+                // Eliminar comentarios de una sola línea (//...) antes de parsear el JSON
+                const cleanedJsonString = jsonString.replace(/\/\/.*(?=,?\s*["}\]])/g, '');
+
+                extractedData = JSON.parse(cleanedJsonString);
             } catch (e) {
                 console.error("Error al analizar el JSON extraído:", e);
                 await flowDynamic("Hubo un problema procesando tu respuesta. Por favor, intenta de nuevo.");
@@ -155,7 +187,7 @@ const flowIA = addKeyword('__any__').addAnswer(
             console.log("Datos de la cita extraídos:", extractedData);
             // Actualizamos el estado con los datos extraídos
             await state.update({ appointmentData: { ...currentState, ...extractedData } });
-            
+
             // Redirigimos al flujo de resumen
             return gotoFlow(flowSummary);
 
